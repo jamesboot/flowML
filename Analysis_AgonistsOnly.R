@@ -439,7 +439,7 @@ ggsave(
   units = 'px'
 )
 
-# Now start ML analysis here ----
+# Now start ML analysis here: just two agonists together ----
 
 # Load package
 library(caret)
@@ -599,7 +599,7 @@ results <- resamples(
 dotplot(results)
 
 # Estimate skill of best model on the validation dataset
-predictions <- predict(fit.gbm, initialValidation)
+predictions <- predict(fit.svmPoly, initialValidation)
 initialValidResults <- confusionMatrix(predictions, as.factor(initialValidation$identity))
 
 initialValidDF <- data.frame(
@@ -610,7 +610,7 @@ initialValidDF <- data.frame(
   row.names = NULL
 )
 
-#write.csv(initialValidDF, file = 'initialValidationResults.csv')
+write.csv(initialValidDF, file = 'initialValidationResults.csv')
 
 # Now perform prediction on unseen validation dataset
 predictions_unseen <- predict(fit.svmPoly, dataUnseen)
@@ -624,9 +624,174 @@ unseenValidDF <- data.frame(
   row.names = NULL
 )
 
-#write.csv(unseenValidDF, file = 'unseenValidationResults.csv')
+write.csv(unseenValidDF, file = 'unseenValidationResults.csv')
 
 # Extract variable importance
 db.Imp <- varImp(fit.svmPoly, scale = F)
 plot(db.Imp)
+
+# Now start ML analysis here: everything together ----
+
+# Subset down to the selected treatments - ADP plus U4 (weak and strong)
+# For both data and metadata
+data_new <- fcs_dat_sub
+meta_new <- meta_data_sub
+
+# Now create training dataset and unseen validation dataset
+# Use 4 donors as training and 2 as unseen validation
+# Make the selection at random
+trainingDonors <- sample(unique(meta_data$Donor), size = 4, replace = F)
+
+# Add identity column to the dataset
+data_new$identity <- as.factor(meta_new$Treatment)
+
+# Subset data 
+dataTraining <-
+  data_new[(meta_new$Donor %in% trainingDonors), ]
+dataUnseen <-
+  data_new[(! meta_new$Donor %in% trainingDonors), ]
+
+# Subset meta
+metaTraining <-
+  meta_new[(meta_new$Donor %in% trainingDonors), ]
+metaUnseen <-
+  meta_new[(! meta_new$Donor %in% trainingDonors), ]
+
+# Check there are equal numbers of each treatment in training and unseen dataset
+unique(dataTraining$identity)
+sum(dataTraining$identity == 'ADP')
+sum(dataTraining$identity == 'U4')
+sum(dataUnseen$identity == 'ADP')
+sum(dataUnseen$identity == 'U4')
+
+# Create a list of 80% of the rows in the training dataset we can use for training
+validation_index <-
+  createDataPartition(dataTraining$identity, p = 0.80, list = FALSE)
+
+# Select 20% of the data for initial validation
+initialValidation <- dataTraining[-validation_index, ]
+
+# Use the remaining 80% of data to training and testing the models
+finalTraining <- dataTraining[validation_index, ]
+
+# Define training parameters
+# Run algorithms using 10-fold cross validation repeated 3 times
+control <-
+  trainControl(
+    method = "repeatedcv",
+    number = 10,
+    repeats = 3,
+    savePredictions = T,
+    classProbs = T,
+    summaryFunction = defaultSummary
+  )
+
+# Set metric for performance
+metric <- "ROC"
+
+# Train models
+
+# Random Forest
+set.seed(7)
+fit.rf <-
+  train(
+    identity ~ .,
+    data = finalTraining,
+    method = "rf",
+    metric = metric,
+    trControl = control
+  )
+
+# Gradient boosting
+set.seed(7)
+fit.gbm <-
+  train(
+    identity ~ .,
+    data = finalTraining,
+    method = "gbm",
+    metric = metric,
+    trControl = control
+  )
+
+# Boosted generalised linear model
+set.seed(7)
+fit.glmboost <-
+  train(
+    identity ~ .,
+    data = finalTraining,
+    method = "glmboost",
+    metric = metric,
+    trControl = control
+  )
+
+# Support vector machines
+set.seed(7)
+fit.svmPoly <-
+  train(
+    identity ~ .,
+    data = finalTraining,
+    method = "svmPoly",
+    metric = metric,
+    trControl = control
+  )
+
+# K nearest neighbours
+set.seed(7)
+fit.knn <-
+  train(
+    identity ~ .,
+    data = finalTraining,
+    method = "knn",
+    metric = metric,
+    trControl = control
+  )
+
+# Summarize accuracy of models
+results <- resamples(
+  list(
+    rf = fit.rf,
+    gbm = fit.gbm,
+    #glmboost = fit.glmboost,
+    svmPoly = fit.svmPoly,
+    knn = fit.knn
+  )
+)
+
+# Compare accuracy of models
+dotplot(results)
+
+# Estimate skill of best model on the validation dataset
+predictions <- predict(fit.rf, initialValidation)
+initialValidResults <- confusionMatrix(predictions, as.factor(initialValidation$identity))
+
+initialValidDF <- data.frame(
+  Accuracy = initialValidResults$overall[1],
+  Accuracy_Lower = initialValidResults$overall[3],
+  Accuracy_Upper = initialValidResults$overall[4],
+  Accuracy_Pval = initialValidResults$overall[5],
+  row.names = NULL
+)
+
+write.csv(initialValidDF, file = 'initialValidationResults.csv')
+
+# Now perform prediction on unseen validation dataset
+predictions_unseen <- predict(fit.rf, dataUnseen)
+unseenValidResults <- confusionMatrix(predictions_unseen, as.factor(dataUnseen$identity))
+
+unseenValidDF <- data.frame(
+  Accuracy = unseenValidResults$overall[1],
+  Accuracy_Lower = unseenValidResults$overall[3],
+  Accuracy_Upper = unseenValidResults$overall[4],
+  Accuracy_Pval = unseenValidResults$overall[5],
+  row.names = NULL
+)
+
+write.csv(unseenValidDF, file = 'unseenValidationResults.csv')
+
+# Extract variable importance
+db.Imp <- varImp(fit.rf, scale = F)
+plot(db.Imp)
+
+
+
 
